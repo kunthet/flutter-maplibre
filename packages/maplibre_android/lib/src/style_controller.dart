@@ -307,4 +307,48 @@ class StyleControllerAndroid extends StyleController {
   void setProjection(MapProjection projection) {
     // globe is not supported on android.
   }
+
+  @override
+  Future<void> updateLayerFilter({
+    required String id,
+    Object? filter,
+  }) async => using((arena) {
+    final jId = id.toJString()..releasedBy(arena);
+    final jLayer = _jStyle.getLayer(jId);
+    if (jLayer == null) {
+      throw Exception('Layer "$id" not found.');
+    }
+    final filterJson = filter == null ? 'true' : jsonEncode(filter);
+    final jFilterString = filterJson.toJString()..releasedBy(arena);
+    final jFilter = jni.Expression$Converter.convert$2(jFilterString)!
+      ..releasedBy(arena);
+    if (jLayer is jni.FillLayer) {
+      jLayer.filter = jFilter;
+    } else if (jLayer is jni.LineLayer) {
+      jLayer.filter = jFilter;
+    } else if (jLayer is jni.SymbolLayer) {
+      jLayer.filter = jFilter;
+    } else if (jLayer is jni.CircleLayer) {
+      jLayer.filter = jFilter;
+    } else if (jLayer is jni.FillExtrusionLayer) {
+      jLayer.filter = jFilter;
+    } else if (jLayer is jni.HeatmapLayer) {
+      jLayer.filter = jFilter;
+    } else {
+      throw UnsupportedError(
+        'updateLayerFilter not supported for layer type $id',
+      );
+    }
+  });
+
+  @override
+  Future<void> updateVectorSourceTiles({
+    required String id,
+    required List<String> tiles,
+  }) async {
+    // Android VectorSource has no runtime setTiles API; desktop WebView handles MVT refresh.
+    debugPrint(
+      'StyleControllerAndroid.updateVectorSourceTiles: not supported on Android.',
+    );
+  }
 }

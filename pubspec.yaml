@@ -19,6 +19,7 @@ workspace:
   - packages/maplibre_platform_interface
   - packages/maplibre_web
   - packages/maplibre_webview
+  - packages/maplibre_windows
 
 dev_dependencies:
   pub_semver: ^2.2.0

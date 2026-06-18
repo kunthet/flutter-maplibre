@@ -24,22 +24,24 @@ class StyleControllerWebView extends StyleController {
 
   @override
   Future<void> addImage(String id, Uint8List bytes) async {
-    final idBytes = id.codeUnits;
-    const headerSize = 7;
-    final data = ByteData(headerSize + idBytes.length + bytes.lengthInBytes);
-    data.setUint8(0, actionAddImage);
-    data.setUint16(1, idBytes.length, Endian.little);
     final pixelRatio = PlatformDispatcher.instance.views.first.devicePixelRatio;
-    data.setFloat32(3, pixelRatio, Endian.little);
-    // write id
-    for (var i = 0; i < idBytes.length; i++) {
-      data.setUint8(headerSize + i, idBytes[i]);
-    }
-    // write image
-    for (var i = 0; i < bytes.lengthInBytes; i++) {
-      data.setUint8(headerSize + idBytes.length + i, bytes[i]);
-    }
-    webSocket.sendBytes(data);
+    final escapedId = id.replaceAll(r'\', r'\\').replaceAll('"', r'\"');
+    final sdf = id.startsWith('myura-shape-') || id.startsWith('myura-svg-');
+    final base64Image = base64Encode(bytes);
+
+    await webViewController.callAsyncJavaScript(
+      functionBody: '''
+      const id = "$escapedId";
+      const base64 = "$base64Image";
+      const blob = await fetch('data:image/png;base64,' + base64).then((r) => r.blob());
+      const img = await createImageBitmap(blob);
+      if (window.map.hasImage(id)) {
+        window.map.removeImage(id);
+      }
+      window.map.addImage(id, img, { pixelRatio: $pixelRatio, sdf: $sdf });
+      return true;
+''',
+    );
   }
 
   @override
@@ -125,7 +127,8 @@ class StyleControllerWebView extends StyleController {
           ''',
             VectorSource() => '''
             type: 'vector',
-            url: ${jsonEncode(source.url)},
+            ${source.tiles != null ? 'tiles: ${jsonEncode(source.tiles)},' : ''}
+            ${source.url != null ? 'url: ${jsonEncode(source.url)},' : ''}
           ''',
             ImageSource() => '''
             type: 'image',
@@ -210,10 +213,16 @@ class StyleControllerWebView extends StyleController {
 
   @override
   Future<void> removeLayer(String id) async {
+    final escapedId = id.replaceAll(r'\', r'\\').replaceAll('"', r'\"');
     await webViewController.callAsyncJavaScript(
       functionBody:
           '''
-      return window.map.removeLayer("${id.replaceAll('"', r'\"')}");
+      const style = window.map.getStyle();
+      if (!style || !style.layers.some((layer) => layer.id === "$escapedId")) {
+        return false;
+      }
+      window.map.removeLayer("$escapedId");
+      return true;
 ''',
     );
   }
@@ -238,13 +247,46 @@ class StyleControllerWebView extends StyleController {
     );
   }
 
+  /// Updates tile URLs on an existing vector source (MVT cache busting).
+  @override
+  Future<void> updateVectorSourceTiles({
+    required String id,
+    required List<String> tiles,
+  }) async {
+    await webViewController.callAsyncJavaScript(
+      functionBody: '''
+      const source = window.map.getSource("$id");
+      if (!source) {
+        throw new Error('Vector source "$id" not found');
+      }
+      source.setTiles(${jsonEncode(tiles)});
+      return true;
+''',
+    );
+  }
+
+  /// Updates the filter on an existing style layer.
+  @override
+  Future<void> updateLayerFilter({
+    required String id,
+    Object? filter,
+  }) async {
+    final filterJson = filter == null ? 'null' : jsonEncode(filter);
+    await webViewController.callAsyncJavaScript(
+      functionBody: '''
+      window.map.setFilter("${id.replaceAll('"', r'\"')}", $filterJson);
+      return true;
+''',
+    );
+  }
+
   @override
   Future<void> updateGeoJsonSource({
     required String id,
     required String data,
   }) async {
-    final dataBytes = data.codeUnits;
-    final idBytes = id.codeUnits;
+    final dataBytes = utf8.encode(data);
+    final idBytes = utf8.encode(id);
     final bytes = ByteData(1 + 1 + idBytes.length + dataBytes.length);
     bytes.setUint8(0, actionUpdateGeoJson);
     bytes.setUint8(1, idBytes.length);

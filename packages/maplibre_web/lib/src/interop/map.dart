@@ -114,6 +114,9 @@ extension type JsMap._(Camera _) implements Camera {
   /// Get a Source by its id.
   external SourceSpecification? getSource(String id);
 
+  /// Updates a layer filter at runtime.
+  external void setFilter(String layerId, JSAny? filter);
+
   /// Get the loaded style.
   external StyleSpecification? getStyle();
 
@@ -169,6 +172,9 @@ extension type MapOptions._(JSObject _) implements JSObject {
 extension type SourceSpecification._(JSObject _) implements JSObject {
   /// The default constructor for a [SourceSpecification].
   external SourceSpecification({required String type});
+
+  /// Updates tile URL templates on a vector/raster source at runtime.
+  external void setTiles(JSAny tiles);
 
   /// Create a new GeoJSON source.
   external factory SourceSpecification.geoJson({

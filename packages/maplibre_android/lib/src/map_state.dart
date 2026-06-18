@@ -19,7 +19,8 @@ part 'style_controller.dart';
 /// The implementation that gets used for state of the [MapLibreMap] widget on
 /// android using JNI and Pigeon as a fallback.
 final class MapLibreMapStateAndroid extends MapLibreMapState
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver
+    implements MapGestureControl {
   late final int _viewId;
   jni.MapView? _mapView;
   jni.MapLibreMap? _jMap;
@@ -809,6 +810,14 @@ final class MapLibreMapStateAndroid extends MapLibreMapState
       jni.Style$OnStyleLoaded.implement(_StyleLoadedCallback(_onStyleLoaded))
         ..releasedBy(arena),
     );
+  });
+
+  @override
+  void setDragPanEnabled(bool enabled) => using((arena) {
+    final jMap = _jMap;
+    if (jMap == null) return;
+    final uiSettings = jMap.uiSettings..releasedBy(arena);
+    uiSettings.scrollGesturesEnabled = enabled;
   });
 }
 

@@ -13,7 +13,8 @@ part 'style_controller.dart';
 
 /// The implementation that gets used for state of the [MapLibreMap] widget on
 /// android using JNI and Pigeon as a fallback.
-final class MapLibreMapStateIos extends MapLibreMapState {
+final class MapLibreMapStateIos extends MapLibreMapState
+    implements MapGestureControl {
   late final int _viewId;
   MLNMapView? _mapView;
   bool _pendingStyleLoaded = true;
@@ -532,5 +533,10 @@ final class MapLibreMapStateIos extends MapLibreMapState {
 
   void _regionIsChangingWithReason(MLNMapView mapView, int reason) {
     _onCameraMoved(mapView);
+  }
+
+  @override
+  void setDragPanEnabled(bool enabled) {
+    _mapView?.isScrollEnabled = enabled;
   }
 }

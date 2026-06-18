@@ -27,6 +27,7 @@ export 'package:maplibre_platform_interface/maplibre_platform_interface.dart'
         MapCreatedCallback,
         MapEvent,
         MapEventCallback,
+        MapGestureControl,
         MapEventCameraIdle,
         MapEventClick,
         MapEventDoubleClick,
@@ -69,7 +70,8 @@ export 'package:maplibre_platform_interface/maplibre_platform_interface.dart'
         circumferenceOfEarth,
         degree2Radian,
         earthCircumferenceWgs84,
-        htmlColorNames;
+        htmlColorNames,
+        setMapDragPanEnabled;
 
 export 'src/layer/circle_layer.dart' show CircleLayer;
 export 'src/layer/marker_layer.dart' show IconAnchor, MarkerLayer;

@@ -47,6 +47,18 @@ abstract class StyleController {
   /// Update the data of a GeoJSON source.
   Future<void> updateGeoJsonSource({required String id, required String data});
 
+  /// Updates the Mapbox filter on an existing style layer at runtime.
+  Future<void> updateLayerFilter({required String id, Object? filter});
+
+  /// Updates tile URL templates on an existing vector source (MVT cache busting).
+  ///
+  /// Fully supported on WebView and web (GL JS `setTiles`). Native mobile SDKs
+  /// do not expose runtime vector tile URL updates; implementations may no-op.
+  Future<void> updateVectorSourceTiles({
+    required String id,
+    required List<String> tiles,
+  });
+
   /// Removes the layer with the given [id] from the map's style.
   Future<void> removeLayer(String id);
 

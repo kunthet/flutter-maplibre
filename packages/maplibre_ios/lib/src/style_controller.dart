@@ -301,4 +301,36 @@ class StyleControllerIos extends StyleController {
     }
     return attributions;
   }
+
+  @override
+  Future<void> updateLayerFilter({
+    required String id,
+    Object? filter,
+  }) async {
+    final ffiLayer = _ffiStyle.layerWithIdentifier(id.toNSString());
+    if (ffiLayer == null) {
+      throw Exception('Layer "$id" not found.');
+    }
+    if (!MLNVectorStyleLayer.isA(ffiLayer)) {
+      throw Exception('Layer "$id" is not a vector style layer.');
+    }
+    final vectorLayer = MLNVectorStyleLayer.as(ffiLayer);
+    if (filter == null) {
+      vectorLayer.predicate = null;
+      return;
+    }
+    vectorLayer.predicate = Helpers.parsePredicateWithRaw(
+      jsonEncode(filter).toNSString(),
+    );
+  }
+
+  @override
+  Future<void> updateVectorSourceTiles({
+    required String id,
+    required List<String> tiles,
+  }) async {
+    debugPrint(
+      'StyleControllerIos.updateVectorSourceTiles: not supported on iOS.',
+    );
+  }
 }

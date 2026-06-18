@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -11,7 +12,8 @@ import 'package:maplibre_webview/src/style_controller.dart';
 import 'package:maplibre_webview/src/websocket.dart';
 
 /// MapLibre GL JS using web views for desktop.
-class MapLibreMapStateWebView extends MapLibreMapState {
+class MapLibreMapStateWebView extends MapLibreMapState
+    implements MapGestureControl {
   /// The web view controller.
   late InAppWebViewController webViewController;
 
@@ -56,16 +58,24 @@ class MapLibreMapStateWebView extends MapLibreMapState {
 <html>
 <head>
     <meta charset="utf-8" />
-    <script src="https://unpkg.com/maplibre-gl@^5.15.0/dist/maplibre-gl.js"></script>
-    <link href="https://unpkg.com/maplibre-gl@^5.15.0/dist/maplibre-gl.css" rel="stylesheet"/>
+    <script src="https://unpkg.com/maplibre-gl@^5.24.0/dist/maplibre-gl.js"></script>
+    <link href="https://unpkg.com/maplibre-gl@^5.24.0/dist/maplibre-gl.css" rel="stylesheet"/>
     <script src='https://unpkg.com/pmtiles@^4.0/dist/pmtiles.js'></script>
     <style>
       html, body, #map { margin: 0; height: 100%; width: 100%; }
+      #map, #map canvas {
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-user-drag: none;
+        touch-action: none;
+      }
     </style>
 </head>
 <body>
     <div id="map"></div>
     <script>
+    document.addEventListener('dragstart', (e) => e.preventDefault(), true);
+    document.addEventListener('selectstart', (e) => e.preventDefault(), true);
     window.ws = new WebSocket('ws://$address:$port');
     window.ws.onopen = function(event) {
         console.log('WebSocket is open now.');
@@ -166,17 +176,15 @@ class MapLibreMapStateWebView extends MapLibreMapState {
             const blob = new Blob([imageBytes], { type: 'image/png' });
             createImageBitmap(blob)
               .then(img => {
-                window.map.addImage(id, img, { pixelRatio });
+                const sdf = id.startsWith('myura-shape-') || id.startsWith('myura-svg-');
+                window.map.addImage(id, img, { pixelRatio, sdf });
               })
               .catch(err => console.warn('addImage decode failed', err));
             break;
           }
           case $actionSetStyle: {
-            const styleLength = buffer.byteLength - 1;
-            let style = '';
-            for (let i = 0; i < styleLength; i++) {
-                style += String.fromCharCode(view.getUint8(1 + i));
-            }
+            const styleBytes = new Uint8Array(buffer, 1);
+            const style = new TextDecoder('utf-8').decode(styleBytes);
             window.map.once('style.load', () => {
                 const buf = new ArrayBuffer(1);
                 const view = new DataView(buf);
@@ -192,14 +200,10 @@ class MapLibreMapStateWebView extends MapLibreMapState {
           }
           case $actionUpdateGeoJson: {
             const idLength = view.getUint8(1);
-            let id = '';
-            for (let i = 0; i < idLength; i++) {
-                id += String.fromCharCode(view.getUint8(2 + i));
-            }
-            let data = '';
-            for (let i = 0; i < buffer.byteLength - 2 - idLength; i++) {
-                data += String.fromCharCode(view.getUint8(2 + idLength + i));
-            }
+            const idBytes = new Uint8Array(buffer, 2, idLength);
+            const id = new TextDecoder('utf-8').decode(idBytes);
+            const dataBytes = new Uint8Array(buffer, 2 + idLength);
+            const data = new TextDecoder('utf-8').decode(dataBytes);
             const source = window.map.getSource(id);
             if (!source) {
               console.warn('WebSocket error: Source with id "' + id + '" does not exist.');
@@ -275,6 +279,15 @@ class MapLibreMapStateWebView extends MapLibreMapState {
     BearingRenderMode bearingRenderMode = BearingRenderMode.gps,
   }) async {
     debugPrint("Can't track the user location on web.");
+  }
+
+  @override
+  void setDragPanEnabled(bool enabled) {
+    webViewController.evaluateJavascript(
+      source: enabled
+          ? 'window.map.dragPan.enable();'
+          : 'window.map.dragPan.disable();',
+    );
   }
 
   @override
@@ -434,7 +447,7 @@ class MapLibreMapStateWebView extends MapLibreMapState {
   @override
   Future<void> setStyle(String style) async {
     final prepared = await _prepareStyleString(style);
-    final bytes = prepared.codeUnits;
+    final bytes = utf8.encode(prepared);
     final data = ByteData(1 + bytes.length);
     data.setUint8(0, actionSetStyle);
     for (var i = 0; i < bytes.length; i++) {
@@ -473,7 +486,10 @@ class MapLibreMapStateWebView extends MapLibreMapState {
 
   @override
   Offset toScreenLocation(Geographic lngLat) {
-    final cam = camera!;
+    final cam = camera;
+    if (cam == null) {
+      return Offset.zero;
+    }
     final size = _mapSize;
     return WebViewProjection.toScreenLocation(cam, size, lngLat);
   }
@@ -576,9 +592,22 @@ class MapLibreMapStateWebView extends MapLibreMapState {
     final ws = await _futureWebSocket;
     debugPrint('WebSocket server listening on ws://${ws.address}:${ws.port}');
     final preparedStyle = await _prepareStyleString(options.initStyle);
-    await controller.evaluateJavascript(
-      source:
+    await controller.callAsyncJavaScript(
+      functionBody:
           '''
+    // Khmer and other complex scripts need HarfBuzz shaping via the complex-text
+    // plugin plus pre-positioned PGF glyph ranges (see myura-research/samples/web_labeling.html).
+    await maplibregl.setRTLTextPlugin(
+        'https://wipfli.github.io/maplibre-gl-complex-text/dist/maplibre-gl-complex-text.js',
+        false
+    );
+
+    const pgfEncodedRangeStarts = [
+        63488, 63232, 62976, 62720, 62464, 62208, 61952, 61696, 61440, 61184,
+        60928, 60672, 60416, 60160, 59904, 59648, 59392, 59136, 58880, 58624,
+        58368, 58112, 57856, 57600, 3072, 2816, 2560, 2304, 10240, 10752
+    ];
+
     let protocol = new pmtiles.Protocol();
     maplibregl.addProtocol("pmtiles",protocol.tile);
     const map = new maplibregl.Map({
@@ -594,6 +623,24 @@ class MapLibreMapStateWebView extends MapLibreMapState {
         attributionControl: false,
     });
     window.map = map;
+
+    map.setTransformRequest((url, resourceType) => {
+        if (resourceType !== 'Glyphs') {
+            return undefined;
+        }
+        const match = url.match(/(\\d+)-(\\d+)\\.pbf(?:\\?.*)?\$/);
+        if (!match) {
+            return undefined;
+        }
+        const start = parseInt(match[1], 10);
+        if (!pgfEncodedRangeStarts.includes(start)) {
+            return undefined;
+        }
+        const end = parseInt(match[2], 10);
+        return {
+            url: `https://wipfli.github.io/pgf-glyph-ranges/font/NotoSansMultiscript-Regular-v1/\${start}-\${end}.pbf`
+        };
+    });
     
     window.map.setMinZoom(${options.minZoom});
     window.map.setMaxZoom(${options.maxZoom});
@@ -661,7 +708,7 @@ class MapLibreMapStateWebView extends MapLibreMapState {
     const bufMove = new ArrayBuffer(1 + 8*11);
     const viewMove = new DataView(bufMove);
     viewMove.setUint8(0, $eventMove);
-    window.map.on('move', (e) => {
+    function sendCameraMoveEvent() {
         const center = window.map.getCenter();
         const bounds = window.map.getBounds();
         const canvas = window.map.getCanvas();
@@ -678,11 +725,12 @@ class MapLibreMapStateWebView extends MapLibreMapState {
         viewMove.setFloat64(73, rect.width, true);
         viewMove.setFloat64(81, rect.height, true);
         window.ws.send(bufMove);
-    });
+    }
     const bufMoveEnd = new ArrayBuffer(1);
     const viewMoveEnd = new DataView(bufMoveEnd);
     viewMoveEnd.setUint8(0, $eventMoveEnd);
     window.map.on('moveend', (e) => {
+        sendCameraMoveEvent();
         window.ws.send(bufMoveEnd);
     });
     window.map.scrollZoom.${gestures.zoom ? 'enable' : 'disable'}();
@@ -741,11 +789,18 @@ class MapLibreMapStateWebView extends MapLibreMapState {
               b.getFloat64(73, Endian.little),
               b.getFloat64(81, Endian.little),
             );
-            setState(() {
-              camera = newCamera;
-              _cachedVisibleRegion = newBounds;
-              _mapSize = newMapSize;
-            });
+            //  setState(() {
+            //   camera = newCamera;
+            //   _cachedVisibleRegion = newBounds;
+            //   _mapSize = newMapSize;
+            // });
+            // Patch: update cached camera without setState during pan.
+            // Rebuilding the WebView widget tree every move frame caused
+            // intermittent pan freezes on Windows WebView2.
+            camera = newCamera;
+            _cachedVisibleRegion = newBounds;
+            _mapSize = newMapSize;
+            // Move events are sent once per gesture (on moveend), not per frame.
             widget.onEvent?.call(MapEventMoveCamera(camera: newCamera));
           case eventMoveStart:
             final CameraChangeReason reason;
@@ -760,6 +815,11 @@ class MapLibreMapStateWebView extends MapLibreMapState {
             }
             widget.onEvent?.call(MapEventStartMoveCamera(reason: reason));
           case eventMoveEnd:
+            // Single rebuild after pan settles so MapLibreMap.children stay
+            // in sync without per-frame setState during drag.
+            if (mounted) {
+              setState(() {});
+            }
             widget.onEvent?.call(const MapEventCameraIdle());
             widget.onEvent?.call(const MapEventIdle());
           // setStyle and initial loading

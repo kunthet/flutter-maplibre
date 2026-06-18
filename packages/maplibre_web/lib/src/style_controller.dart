@@ -286,4 +286,27 @@ class StyleControllerWeb extends StyleController {
   void setProjection(MapProjection projection) => _map.setProjection(
     interop.ProjectionSpecification(type: projection.name),
   );
+
+  @override
+  Future<void> updateLayerFilter({
+    required String id,
+    Object? filter,
+  }) async {
+    _map.setFilter(
+      id,
+      filter == null ? null : parse(jsonEncode(filter)),
+    );
+  }
+
+  @override
+  Future<void> updateVectorSourceTiles({
+    required String id,
+    required List<String> tiles,
+  }) async {
+    final source = _map.getSource(id);
+    if (source == null) {
+      throw Exception('Vector source "$id" not found');
+    }
+    source.setTiles(tiles.jsify()!);
+  }
 }
