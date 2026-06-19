@@ -22,6 +22,7 @@ final class MapLibreMapStateWindows extends MapLibreMapState implements MapGestu
   bool _styleLoaded = false;
   Size _mapSize = Size.zero;
   Future<void>? _ensureFuture;
+  Timer? _cameraRefreshTimer;
 
   @override
   StyleControllerWindows? style;
@@ -97,6 +98,10 @@ final class MapLibreMapStateWindows extends MapLibreMapState implements MapGestu
     }
     _textureId = textureId;
     style = StyleControllerWindows._(textureId);
+    await NativeMapChannel.setInvertWheelZoom(
+      textureId,
+      options.gestures.invertWheelZoom,
+    );
     if (mounted) {
       setState(() {});
     }
@@ -112,6 +117,16 @@ final class MapLibreMapStateWindows extends MapLibreMapState implements MapGestu
     widget.onEvent?.call(MapEventMapCreated(mapController: this));
     widget.onMapCreated?.call(this);
     await _refreshCamera();
+  }
+
+  /// The native `cameraIdle` event is only flushed on the next inbound method
+  /// call, so after a programmatic camera move we proactively re-query the
+  /// camera to keep Dart-side readouts/overlays in sync.
+  void _scheduleCameraRefresh(Duration delay) {
+    _cameraRefreshTimer?.cancel();
+    _cameraRefreshTimer = Timer(delay, () {
+      if (mounted) unawaited(_refreshCamera());
+    });
   }
 
   Future<void> _refreshCamera() async {
@@ -138,7 +153,58 @@ final class MapLibreMapStateWindows extends MapLibreMapState implements MapGestu
     }
   }
 
-  DateTime? _lastPointerMoveSent;
+  void _onPointer(PointerEvent event) {
+    final textureId = _textureId;
+    if (textureId == null) return;
+
+    final shift = HardwareKeyboard.instance.isShiftPressed;
+    final control = HardwareKeyboard.instance.isControlPressed;
+
+    if (event is PointerScrollEvent) {
+      if (!options.gestures.zoom) return;
+      unawaited(NativeMapChannel.onPointer(
+        textureId,
+        phase: 'scroll',
+        x: event.localPosition.dx,
+        y: event.localPosition.dy,
+        scrollDelta: event.scrollDelta.dy,
+        shift: shift,
+        control: control,
+      ));
+      return;
+    }
+
+    if (!_dragPanEnabled) return;
+
+    if (event is PointerDownEvent) {
+      _lastPanPoint = event.localPosition;
+      unawaited(NativeMapChannel.onPointer(
+        textureId,
+        phase: 'down',
+        x: event.localPosition.dx,
+        y: event.localPosition.dy,
+        shift: shift,
+        control: control,
+      ));
+    } else if (event is PointerMoveEvent && _lastPanPoint != null) {
+      unawaited(NativeMapChannel.onPointer(
+        textureId,
+        phase: 'move',
+        x: event.localPosition.dx,
+        y: event.localPosition.dy,
+        shift: shift,
+        control: control,
+      ));
+    } else if (event is PointerUpEvent || event is PointerCancelEvent) {
+      _lastPanPoint = null;
+      unawaited(NativeMapChannel.onPointer(
+        textureId,
+        phase: event is PointerCancelEvent ? 'cancel' : 'up',
+        x: event.localPosition.dx,
+        y: event.localPosition.dy,
+      ));
+    }
+  }
 
   void _onNativeEvent(Map<String, dynamic> event) {
     final type = event['type'] as String?;
@@ -172,57 +238,6 @@ final class MapLibreMapStateWindows extends MapLibreMapState implements MapGestu
     }
   }
 
-  void _onPointer(PointerEvent event) {
-    final textureId = _textureId;
-    if (textureId == null) return;
-
-    if (event is PointerScrollEvent) {
-      unawaited(NativeMapChannel.onPointer(
-        textureId,
-        phase: 'scroll',
-        x: event.localPosition.dx,
-        y: event.localPosition.dy,
-        scrollDelta: event.scrollDelta.dy,
-        shift: HardwareKeyboard.instance.isShiftPressed,
-        control: HardwareKeyboard.instance.isControlPressed,
-      ));
-      return;
-    }
-
-    if (!_dragPanEnabled) return;
-
-    if (event is PointerDownEvent) {
-      _lastPanPoint = event.localPosition;
-      unawaited(NativeMapChannel.onPointer(
-        textureId,
-        phase: 'down',
-        x: event.localPosition.dx,
-        y: event.localPosition.dy,
-      ));
-    } else if (event is PointerMoveEvent && _lastPanPoint != null) {
-      final now = DateTime.now();
-      if (_lastPointerMoveSent != null &&
-          now.difference(_lastPointerMoveSent!) < const Duration(milliseconds: 16)) {
-        return;
-      }
-      _lastPointerMoveSent = now;
-      unawaited(NativeMapChannel.onPointer(
-        textureId,
-        phase: 'move',
-        x: event.localPosition.dx,
-        y: event.localPosition.dy,
-      ));
-    } else if (event is PointerUpEvent || event is PointerCancelEvent) {
-      _lastPanPoint = null;
-      unawaited(NativeMapChannel.onPointer(
-        textureId,
-        phase: 'up',
-        x: event.localPosition.dx,
-        y: event.localPosition.dy,
-      ));
-    }
-  }
-
   int get _id {
     final id = _textureId;
     if (id == null) throw StateError('Map texture not initialized');
@@ -239,16 +254,18 @@ final class MapLibreMapStateWindows extends MapLibreMapState implements MapGestu
     double webSpeed = 1.2,
     Duration? webMaxDuration,
     EdgeInsets padding = EdgeInsets.zero,
-  }) =>
-      NativeMapChannel.animateCamera(
-        _id,
-        lat: center?.lat,
-        lon: center?.lon,
-        zoom: zoom,
-        bearing: bearing,
-        pitch: pitch,
-        durationMs: nativeDuration.inMilliseconds,
-      );
+  }) async {
+    await NativeMapChannel.animateCamera(
+      _id,
+      lat: center?.lat,
+      lon: center?.lon,
+      zoom: zoom,
+      bearing: bearing,
+      pitch: pitch,
+      durationMs: nativeDuration.inMilliseconds,
+    );
+    _scheduleCameraRefresh(nativeDuration + const Duration(milliseconds: 120));
+  }
 
   @override
   Future<void> moveCamera({
@@ -257,15 +274,17 @@ final class MapLibreMapStateWindows extends MapLibreMapState implements MapGestu
     double? bearing,
     double? pitch,
     EdgeInsets padding = EdgeInsets.zero,
-  }) =>
-      NativeMapChannel.moveCamera(
-        _id,
-        lat: center?.lat,
-        lon: center?.lon,
-        zoom: zoom,
-        bearing: bearing,
-        pitch: pitch,
-      );
+  }) async {
+    await NativeMapChannel.moveCamera(
+      _id,
+      lat: center?.lat,
+      lon: center?.lon,
+      zoom: zoom,
+      bearing: bearing,
+      pitch: pitch,
+    );
+    _scheduleCameraRefresh(const Duration(milliseconds: 120));
+  }
 
   @override
   Future<void> fitBounds({
@@ -412,7 +431,11 @@ final class MapLibreMapStateWindows extends MapLibreMapState implements MapGestu
   @override
   void dispose() {
     final textureId = _textureId;
+    _textureId = null;
+    _cameraRefreshTimer?.cancel();
+    _cameraRefreshTimer = null;
     _eventSub?.cancel();
+    _eventSub = null;
     if (textureId != null) {
       unawaited(NativeMapChannel.disposeMap(textureId));
     }

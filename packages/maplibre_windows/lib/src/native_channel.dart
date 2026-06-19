@@ -126,6 +126,12 @@ final class NativeMapChannel {
         'enabled': enabled,
       });
 
+  static Future<void> setInvertWheelZoom(int textureId, bool invert) =>
+      _method.invokeMethod<void>('setInvertWheelZoom', {
+        'textureId': textureId,
+        'invert': invert,
+      });
+
   static Future<void> addSource(int textureId, String id, String sourceJson) =>
       _method.invokeMethod<void>('addSource', {
         'textureId': textureId,

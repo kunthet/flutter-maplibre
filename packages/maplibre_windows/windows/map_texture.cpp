@@ -29,6 +29,9 @@ MapTexture::MapTexture(int width, int height, FrameCallback on_frame_requested)
 MapTexture::~MapTexture() = default;
 
 void MapTexture::Resize(int width, int height) {
+    if (width <= 0 || height <= 0) {
+        return;
+    }
     const std::lock_guard<std::mutex> lock(mutex_);
     if (!buffer_) {
         buffer_ = std::make_unique<FlutterDesktopPixelBuffer>();
@@ -53,30 +56,26 @@ void MapTexture::UpdatePixels(const uint8_t* src, size_t src_width, size_t src_h
         return;
     }
 
-    const size_t dst_width = buffer_->width;
-    const size_t dst_height = buffer_->height;
-    if (dst_width == 0 || dst_height == 0) {
-        return;
+    // Keep the texture buffer at the renderer's physical resolution so the
+    // engine uploads crisp pixels (no CPU resample, correct on HiDPI displays).
+    const size_t needed = src_width * src_height * 4;
+    if (pixels_.size() != needed) {
+        pixels_.assign(needed, 0);
     }
-
-    pixels_.assign(dst_width * dst_height * 4, 0);
+    buffer_->width = src_width;
+    buffer_->height = src_height;
     buffer_->buffer = pixels_.data();
 
-    if (src_width == dst_width && src_height == dst_height) {
-        for (size_t i = 0; i < pixels_.size(); i += 4) {
-            CopyUnpremultipliedPixel(src + i, pixels_.data() + i);
-        }
-        return;
-    }
-
-    // HeadlessFrontend renders at physical resolution; Flutter texture is logical size.
-    for (size_t y = 0; y < dst_height; ++y) {
-        const size_t src_y = y * src_height / dst_height;
-        for (size_t x = 0; x < dst_width; ++x) {
-            const size_t src_x = x * src_width / dst_width;
-            const size_t src_index = (src_y * src_width + src_x) * 4;
-            const size_t dst_index = (y * dst_width + x) * 4;
-            CopyUnpremultipliedPixel(src + src_index, pixels_.data() + dst_index);
+    uint8_t* dst = pixels_.data();
+    for (size_t i = 0; i < needed; i += 4) {
+        const uint8_t alpha = src[i + 3];
+        if (alpha == 255) {
+            dst[i + 0] = src[i + 0];
+            dst[i + 1] = src[i + 1];
+            dst[i + 2] = src[i + 2];
+            dst[i + 3] = 255;
+        } else {
+            CopyUnpremultipliedPixel(src + i, dst + i);
         }
     }
 }
@@ -88,8 +87,13 @@ void MapTexture::MarkFrameAvailable() {
 }
 
 const FlutterDesktopPixelBuffer* MapTexture::CopyPixelBuffer(size_t width, size_t height) {
+    // The requested width/height are only a hint; the engine reads the actual
+    // dimensions from the returned buffer. Returning our buffer regardless keeps
+    // rendering robust across device-pixel-ratio changes and resizes.
+    (void)width;
+    (void)height;
     mutex_.lock();
-    if (!buffer_ || buffer_->width != width || buffer_->height != height) {
+    if (!buffer_ || !buffer_->buffer || buffer_->width == 0 || buffer_->height == 0) {
         mutex_.unlock();
         return nullptr;
     }

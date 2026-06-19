@@ -10,7 +10,7 @@ if (-not (Test-Path $vcvars)) {
   throw "Visual Studio vcvars64.bat not found"
 }
 
-$root = Resolve-Path (Join-Path $PSScriptRoot "..\..\..\maplibre-native")
+$root = Resolve-Path (Join-Path $PSScriptRoot "..\..\..\..\maplibre-native")
 $build = Join-Path $root "build-windows-opengl"
 
 cmd /c "`"$vcvars`" && cmake --build `"$build`" --target maplibre-embed --config Release && cmake --build `"$build`" --target mbgl-core-deps --config Release"

@@ -12,18 +12,22 @@
 #include <string>
 #include <vector>
 
+#include "crash_logger.h"
 #include "map_embedder.h"
+#include "map_gpu_texture.h"
 #include "map_texture.h"
 
 namespace {
 
 using maplibre_windows::CameraState;
 using maplibre_windows::MapEmbedder;
+using maplibre_windows::MapGpuTexture;
 using maplibre_windows::MapTexture;
 
 struct MapInstance {
     std::unique_ptr<MapEmbedder> embedder;
-    std::unique_ptr<MapTexture> texture;
+    std::unique_ptr<MapTexture> texture;          // CPU pixel-buffer path
+    std::unique_ptr<MapGpuTexture> gpu_texture;   // zero-copy GPU surface path
     std::unique_ptr<flutter::TextureVariant> flutter_texture;
     int64_t texture_id = -1;
     std::unique_ptr<flutter::EventSink<flutter::EncodableValue>> event_sink;
@@ -131,6 +135,20 @@ void DeliverFrame(int64_t texture_id, const uint8_t* data, size_t w, size_t h) {
     texture->MarkFrameAvailable();
 }
 
+void DeliverGpuFrame(int64_t texture_id, void* shared_handle, int w, int h) {
+    MapGpuTexture* gpu_texture = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_maps_mutex);
+        auto* map = GetMap(texture_id);
+        if (!map || !map->gpu_texture) {
+            return;
+        }
+        gpu_texture = map->gpu_texture.get();
+    }
+    gpu_texture->SetSurface(shared_handle, w, h);
+    gpu_texture->MarkFrameAvailable();
+}
+
 void DeliverEvent(int64_t texture_id, const std::string& type) {
     std::lock_guard<std::mutex> lock(g_pending_events_mutex);
     g_pending_events[texture_id].push_back(type);
@@ -167,6 +185,11 @@ MaplibreWindowsPlugin::~MaplibreWindowsPlugin() {
         maps.swap(g_maps);
     }
     for (auto& entry : maps) {
+        if (!entry.second) {
+            continue;
+        }
+        entry.second->event_sink.reset();
+        entry.second->embedder.reset();
         if (texture_registrar_) {
             texture_registrar_->UnregisterTexture(entry.first);
         }
@@ -174,6 +197,7 @@ MaplibreWindowsPlugin::~MaplibreWindowsPlugin() {
 }
 
 void MaplibreWindowsPlugin::RegisterWithRegistrar(flutter::PluginRegistrarWindows* registrar) {
+    InstallCrashLogger();
     auto plugin = std::make_unique<MaplibreWindowsPlugin>(registrar);
     registrar->AddPlugin(std::move(plugin));
 }
@@ -273,55 +297,67 @@ void MaplibreWindowsPlugin::HandleMethodCall(
         if (has_camera) init_camera = camera;
 
         auto instance = std::make_unique<MapInstance>();
+        auto* registrar = texture_registrar_;
 
-        struct FrameState {
-            flutter::TextureRegistrar* texture_registrar = nullptr;
-            int64_t texture_id = -1;
+        // The texture id is only known after registration, but the embedder's
+        // frame callbacks (which fire from the map thread) need it. Share it via
+        // a holder that stays -1 until the instance is fully discoverable.
+        auto texture_id_holder = std::make_shared<int64_t>(-1);
+
+        // Construct the embedder first: it determines whether the zero-copy GPU
+        // surface path is available, which decides the texture variant to
+        // register. Frames produced before the holder is set are dropped.
+        std::unique_ptr<MapEmbedder> embedder;
+        try {
+            embedder = std::make_unique<MapEmbedder>(
+                width,
+                height,
+                pixel_ratio,
+                /*init_style=*/"",
+                init_camera,
+                [texture_id_holder](const std::string& type, const std::string&) {
+                    if (*texture_id_holder >= 0) DeliverEvent(*texture_id_holder, type);
+                },
+                [texture_id_holder](const uint8_t* data, size_t w, size_t h) {
+                    if (*texture_id_holder >= 0) DeliverFrame(*texture_id_holder, data, w, h);
+                },
+                [texture_id_holder](void* handle, int w, int h) {
+                    if (*texture_id_holder >= 0) DeliverGpuFrame(*texture_id_holder, handle, w, h);
+                });
+        } catch (const std::exception& ex) {
+            result->Error("init_failed", ex.what());
+            return;
+        }
+
+        const auto mark_frame_available = [texture_id_holder, registrar]() {
+            if (*texture_id_holder >= 0) {
+                registrar->MarkTextureFrameAvailable(*texture_id_holder);
+            }
         };
-        auto frame_state = std::make_shared<FrameState>();
-        frame_state->texture_registrar = texture_registrar_;
 
-        instance->texture = std::make_unique<MapTexture>(
-            width,
-            height,
-            [frame_state]() {
-                if (frame_state->texture_id >= 0) {
-                    frame_state->texture_registrar->MarkTextureFrameAvailable(frame_state->texture_id);
-                }
-            });
-
-        instance->flutter_texture =
-            std::make_unique<flutter::TextureVariant>(flutter::PixelBufferTexture(
+        if (embedder->IsGpuMode()) {
+            instance->gpu_texture = std::make_unique<MapGpuTexture>(mark_frame_available);
+            instance->flutter_texture = std::make_unique<flutter::TextureVariant>(flutter::GpuSurfaceTexture(
+                kFlutterDesktopGpuSurfaceTypeDxgiSharedHandle,
+                [tex = instance->gpu_texture.get()](size_t w, size_t h) { return tex->ObtainDescriptor(w, h); }));
+        } else {
+            instance->texture = std::make_unique<MapTexture>(width, height, mark_frame_available);
+            instance->flutter_texture = std::make_unique<flutter::TextureVariant>(flutter::PixelBufferTexture(
                 [tex = instance->texture.get()](size_t w, size_t h) { return tex->CopyPixelBuffer(w, h); }));
+        }
 
-        const int64_t texture_id = texture_registrar_->RegisterTexture(instance->flutter_texture.get());
+        const int64_t texture_id = registrar->RegisterTexture(instance->flutter_texture.get());
         instance->texture_id = texture_id;
-        frame_state->texture_id = texture_id;
+        instance->embedder = std::move(embedder);
 
         {
             std::lock_guard<std::mutex> lock(g_maps_mutex);
             g_maps[texture_id] = std::move(instance);
         }
 
-        try {
-            auto embedder = std::make_unique<MapEmbedder>(
-                width,
-                height,
-                pixel_ratio,
-                /*init_style=*/"",
-                init_camera,
-                [texture_id](const std::string& type, const std::string&) { DeliverEvent(texture_id, type); },
-                [texture_id](const uint8_t* data, size_t w, size_t h) { DeliverFrame(texture_id, data, w, h); });
-
-            std::lock_guard<std::mutex> lock(g_maps_mutex);
-            g_maps[texture_id]->embedder = std::move(embedder);
-        } catch (const std::exception& ex) {
-            std::lock_guard<std::mutex> lock(g_maps_mutex);
-            texture_registrar_->UnregisterTexture(texture_id);
-            g_maps.erase(texture_id);
-            result->Error("init_failed", ex.what());
-            return;
-        }
+        // Enable frame delivery only now that the instance is registered and
+        // discoverable from the map thread's callbacks.
+        *texture_id_holder = texture_id;
 
         result->Success(flutter::EncodableValue(texture_id));
         return;
@@ -347,6 +383,8 @@ void MaplibreWindowsPlugin::HandleMethodCall(
             }
         }
         if (removed) {
+            removed->event_sink.reset();
+            removed->embedder.reset();
             texture_registrar_->UnregisterTexture(removed->texture_id);
         }
         result->Success();
@@ -376,7 +414,20 @@ void MaplibreWindowsPlugin::HandleMethodCall(
     if (method == "resizeMap") {
         const int width = static_cast<int>(GetDouble(*args, "width").value_or(256));
         const int height = static_cast<int>(GetDouble(*args, "height").value_or(256));
-        texture->Resize(width, height);
+        if (width <= 0 || height <= 0) {
+            result->Success();
+            return;
+        }
+        // CPU pixel-buffer path only; in GPU mode texture is null and the shared
+        // surface is resized on the next Publish(EnsureSize).
+        if (texture) {
+            texture->Resize(width, height);
+        } else {
+            std::lock_guard<std::mutex> lock(g_maps_mutex);
+            if (auto* map = GetMap(*texture_id); map && map->gpu_texture) {
+                map->gpu_texture->InvalidateSurface();
+            }
+        }
         embedder->Resize(width, height);
         result->Success();
         return;
@@ -428,6 +479,14 @@ void MaplibreWindowsPlugin::HandleMethodCall(
         const auto it = args->find(flutter::EncodableValue("enabled"));
         const bool enabled = it != args->end() && std::get<bool>(it->second);
         embedder->SetDragPanEnabled(enabled);
+        result->Success();
+        return;
+    }
+
+    if (method == "setInvertWheelZoom") {
+        const auto it = args->find(flutter::EncodableValue("invert"));
+        const bool invert = it != args->end() && std::get<bool>(it->second);
+        embedder->SetInvertWheelZoom(invert);
         result->Success();
         return;
     }
