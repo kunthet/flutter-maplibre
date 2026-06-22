@@ -67,6 +67,10 @@ target_compile_definitions(${PLUGIN_NAME} PRIVATE FLUTTER_PLUGIN_IMPL)
 if(MSVC)
   target_compile_options(${PLUGIN_NAME} PRIVATE /Z7)
   target_link_options(${PLUGIN_NAME} PRIVATE /DEBUG)
+  # vcpkg ANGLE is linked statically (libGLESv2.lib + ANGLE.lib). libGLESv2.obj
+  # still marks ANGLE platform entry points as dllimport, while ANGLE.lib defines
+  # them — link succeeds; MSVC emits benign LNK4217.
+  target_link_options(${PLUGIN_NAME} PRIVATE /IGNORE:4217)
 endif()
 
 target_include_directories(${PLUGIN_NAME} PRIVATE
