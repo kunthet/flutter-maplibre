@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' show cos, log, pi, pow;
-import 'dart:typed_data';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -98,10 +97,7 @@ final class MapLibreMapStateWindows extends MapLibreMapState implements MapGestu
     }
     _textureId = textureId;
     style = StyleControllerWindows._(textureId);
-    await NativeMapChannel.setInvertWheelZoom(
-      textureId,
-      options.gestures.invertWheelZoom,
-    );
+    await NativeMapChannel.setInvertWheelZoom(textureId, options.gestures.invertWheelZoom);
     if (mounted) {
       setState(() {});
     }
@@ -134,10 +130,7 @@ final class MapLibreMapStateWindows extends MapLibreMapState implements MapGestu
     try {
       final data = await NativeMapChannel.getCamera(_id);
       final next = MapCamera(
-        center: Geographic(
-          lon: (data['lon'] as num?)?.toDouble() ?? 0,
-          lat: (data['lat'] as num?)?.toDouble() ?? 0,
-        ),
+        center: Geographic(lon: (data['lon'] as num?)?.toDouble() ?? 0, lat: (data['lat'] as num?)?.toDouble() ?? 0),
         zoom: (data['zoom'] as num?)?.toDouble() ?? options.initZoom,
         bearing: (data['bearing'] as num?)?.toDouble() ?? options.initBearing,
         pitch: (data['pitch'] as num?)?.toDouble() ?? options.initPitch,
@@ -162,15 +155,17 @@ final class MapLibreMapStateWindows extends MapLibreMapState implements MapGestu
 
     if (event is PointerScrollEvent) {
       if (!options.gestures.zoom) return;
-      unawaited(NativeMapChannel.onPointer(
-        textureId,
-        phase: 'scroll',
-        x: event.localPosition.dx,
-        y: event.localPosition.dy,
-        scrollDelta: event.scrollDelta.dy,
-        shift: shift,
-        control: control,
-      ));
+      unawaited(
+        NativeMapChannel.onPointer(
+          textureId,
+          phase: 'scroll',
+          x: event.localPosition.dx,
+          y: event.localPosition.dy,
+          scrollDelta: event.scrollDelta.dy,
+          shift: shift,
+          control: control,
+        ),
+      );
       return;
     }
 
@@ -178,31 +173,14 @@ final class MapLibreMapStateWindows extends MapLibreMapState implements MapGestu
 
     if (event is PointerDownEvent) {
       _lastPanPoint = event.localPosition;
-      unawaited(NativeMapChannel.onPointer(
-        textureId,
-        phase: 'down',
-        x: event.localPosition.dx,
-        y: event.localPosition.dy,
-        shift: shift,
-        control: control,
-      ));
+      unawaited(NativeMapChannel.onPointer(textureId, phase: 'down', x: event.localPosition.dx, y: event.localPosition.dy, shift: shift, control: control));
     } else if (event is PointerMoveEvent && _lastPanPoint != null) {
-      unawaited(NativeMapChannel.onPointer(
-        textureId,
-        phase: 'move',
-        x: event.localPosition.dx,
-        y: event.localPosition.dy,
-        shift: shift,
-        control: control,
-      ));
+      unawaited(NativeMapChannel.onPointer(textureId, phase: 'move', x: event.localPosition.dx, y: event.localPosition.dy, shift: shift, control: control));
     } else if (event is PointerUpEvent || event is PointerCancelEvent) {
       _lastPanPoint = null;
-      unawaited(NativeMapChannel.onPointer(
-        textureId,
-        phase: event is PointerCancelEvent ? 'cancel' : 'up',
-        x: event.localPosition.dx,
-        y: event.localPosition.dy,
-      ));
+      unawaited(
+        NativeMapChannel.onPointer(textureId, phase: event is PointerCancelEvent ? 'cancel' : 'up', x: event.localPosition.dx, y: event.localPosition.dy),
+      );
     }
   }
 
@@ -268,21 +246,8 @@ final class MapLibreMapStateWindows extends MapLibreMapState implements MapGestu
   }
 
   @override
-  Future<void> moveCamera({
-    Geographic? center,
-    double? zoom,
-    double? bearing,
-    double? pitch,
-    EdgeInsets padding = EdgeInsets.zero,
-  }) async {
-    await NativeMapChannel.moveCamera(
-      _id,
-      lat: center?.lat,
-      lon: center?.lon,
-      zoom: zoom,
-      bearing: bearing,
-      pitch: pitch,
-    );
+  Future<void> moveCamera({Geographic? center, double? zoom, double? bearing, double? pitch, EdgeInsets padding = EdgeInsets.zero}) async {
+    await NativeMapChannel.moveCamera(_id, lat: center?.lat, lon: center?.lon, zoom: zoom, bearing: bearing, pitch: pitch);
     _scheduleCameraRefresh(const Duration(milliseconds: 120));
   }
 
@@ -299,23 +264,12 @@ final class MapLibreMapStateWindows extends MapLibreMapState implements MapGestu
     bool webLinear = false,
     EdgeInsets padding = EdgeInsets.zero,
   }) async {
-    final center = Geographic(
-      lon: (bounds.longitudeWest + bounds.longitudeEast) / 2,
-      lat: (bounds.latitudeSouth + bounds.latitudeNorth) / 2,
-    );
+    final center = Geographic(lon: (bounds.longitudeWest + bounds.longitudeEast) / 2, lat: (bounds.latitudeSouth + bounds.latitudeNorth) / 2);
     final latSpan = (bounds.latitudeNorth - bounds.latitudeSouth).abs();
     final lonSpan = (bounds.longitudeEast - bounds.longitudeWest).abs();
     final span = latSpan > lonSpan ? latSpan : lonSpan;
-    final zoom = span <= 0
-        ? options.initZoom
-        : (_log2(360 / span) - 1).clamp(options.minZoom, options.maxZoom);
-    await animateCamera(
-      center: center,
-      zoom: zoom,
-      bearing: bearing,
-      pitch: pitch,
-      nativeDuration: nativeDuration,
-    );
+    final zoom = span <= 0 ? options.initZoom : (_log2(360 / span) - 1).clamp(options.minZoom, options.maxZoom);
+    await animateCamera(center: center, zoom: zoom, bearing: bearing, pitch: pitch, nativeDuration: nativeDuration);
   }
 
   double _log2(double x) => log(x) / log(2);
@@ -343,19 +297,12 @@ final class MapLibreMapStateWindows extends MapLibreMapState implements MapGestu
   }) async {}
 
   @override
-  List<RenderedFeature> featuresAtPoint(
-    Offset point, {
-    List<String>? layerIds,
-    double radius = 0,
-  }) {
+  List<RenderedFeature> featuresAtPoint(Offset point, {List<String>? layerIds, double radius = 0}) {
     throw UnsupportedError('featuresAtPoint is sync-only stub on Windows; use async query via channel');
   }
 
   @override
-  List<RenderedFeature> featuresInRect(
-    Rect rect, {
-    List<String>? layerIds,
-  }) {
+  List<RenderedFeature> featuresInRect(Rect rect, {List<String>? layerIds}) {
     throw UnimplementedError('featuresInRect not yet implemented on Windows');
   }
 
@@ -371,10 +318,7 @@ final class MapLibreMapStateWindows extends MapLibreMapState implements MapGestu
   }
 
   @override
-  Future<void> trackLocation({
-    bool trackLocation = true,
-    BearingTrackMode trackBearing = BearingTrackMode.gps,
-  }) async {}
+  Future<void> trackLocation({bool trackLocation = true, BearingTrackMode trackBearing = BearingTrackMode.gps}) async {}
 
   @override
   Geographic toLngLat(Offset screenLocation) {
@@ -386,8 +330,7 @@ final class MapLibreMapStateWindows extends MapLibreMapState implements MapGestu
   }
 
   @override
-  List<Geographic> toLngLats(List<Offset> screenLocations) =>
-      screenLocations.map(toLngLat).toList();
+  List<Geographic> toLngLats(List<Offset> screenLocations) => screenLocations.map(toLngLat).toList();
 
   @override
   Offset toScreenLocation(Geographic lngLat) {
@@ -399,8 +342,7 @@ final class MapLibreMapStateWindows extends MapLibreMapState implements MapGestu
   }
 
   @override
-  List<Offset> toScreenLocations(List<Geographic> lngLats) =>
-      lngLats.map(toScreenLocation).toList();
+  List<Offset> toScreenLocations(List<Geographic> lngLats) => lngLats.map(toScreenLocation).toList();
 
   @override
   double getMetersPerPixelAtLatitude(double latitude) {
@@ -414,12 +356,7 @@ final class MapLibreMapStateWindows extends MapLibreMapState implements MapGestu
     final z = camera?.zoom ?? options.initZoom;
     final latDelta = 360 / pow(2, z) / 2;
     final lonDelta = latDelta;
-    return LngLatBounds(
-      longitudeWest: c.lon - lonDelta,
-      longitudeEast: c.lon + lonDelta,
-      latitudeSouth: c.lat - latDelta,
-      latitudeNorth: c.lat + latDelta,
-    );
+    return LngLatBounds(longitudeWest: c.lon - lonDelta, longitudeEast: c.lon + lonDelta, latitudeSouth: c.lat - latDelta, latitudeNorth: c.lat + latDelta);
   }
 
   @override
@@ -445,13 +382,7 @@ final class MapLibreMapStateWindows extends MapLibreMapState implements MapGestu
 }
 
 class _MapTextureHost extends StatefulWidget {
-  const _MapTextureHost({
-    required this.width,
-    required this.height,
-    required this.onReady,
-    required this.textureId,
-    required this.onPointer,
-  });
+  const _MapTextureHost({required this.width, required this.height, required this.onReady, required this.textureId, required this.onPointer});
 
   final int width;
   final int height;

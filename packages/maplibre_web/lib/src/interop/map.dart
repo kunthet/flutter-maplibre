@@ -170,11 +170,6 @@ extension type MapOptions._(JSObject _) implements JSObject {
 @anonymous
 @JS()
 extension type SourceSpecification._(JSObject _) implements JSObject {
-  /// The default constructor for a [SourceSpecification].
-  external SourceSpecification({required String type});
-
-  /// Updates tile URL templates on a vector/raster source at runtime.
-  external void setTiles(JSAny tiles);
 
   /// Create a new GeoJSON source.
   external factory SourceSpecification.geoJson({
@@ -274,6 +269,11 @@ extension type SourceSpecification._(JSObject _) implements JSObject {
     required JSAny urls,
     required JSAny coordinates,
   });
+  /// The default constructor for a [SourceSpecification].
+  external SourceSpecification({required String type});
+
+  /// Updates tile URL templates on a vector/raster source at runtime.
+  external void setTiles(JSAny tiles);
 
   /// Used to update the data of a GeoJSON source.
   external void setData(JSAny data);
